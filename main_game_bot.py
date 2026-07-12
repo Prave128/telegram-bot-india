@@ -4224,10 +4224,21 @@ def main():
         http_version="1.1"
     )
     
-    app = ApplicationBuilder().token(BOT_TOKEN).request(request).build()
+    # Fix for Python 3.13+ event loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # Use Application.builder() instead of ApplicationBuilder()
+    app = Application.builder().token(BOT_TOKEN).request(request).build()
+    
     app.post_init = set_commands
     
     # ============ COMMANDS ============
+    
+    # Game Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("play", play_command))
     app.add_handler(CommandHandler("profile", profile_command))
@@ -4241,56 +4252,85 @@ def main():
     app.add_handler(CommandHandler("claim", claim_command))
     app.add_handler(CommandHandler("tip", tip_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    
+    # Payment Redirect Commands (these just redirect to the payment bot)
     app.add_handler(CommandHandler("deposit", deposit_command))
     app.add_handler(CommandHandler("depo", deposit_command))
+    
+    # Admin Commands
     app.add_handler(CommandHandler("addbalance", admin_addbalance))
     
     # ============ CALLBACKS ============
+    
+    # Currency
     app.add_handler(CallbackQueryHandler(set_currency, pattern="^currency_"))
+    
+    # Challenge Flow
     app.add_handler(CallbackQueryHandler(challenge_step1, pattern="^challenge_step1$"))
     app.add_handler(CallbackQueryHandler(challenge_bet_selected, pattern="^challenge_bet_"))
     app.add_handler(CallbackQueryHandler(challenge_rounds_selected, pattern="^challenge_rounds_"))
     app.add_handler(CallbackQueryHandler(handle_challenge_response, pattern="^(accept|decline)_"))
     app.add_handler(CallbackQueryHandler(pvp_roll_button, pattern="^pvp_roll_"))
+    
+    # Game Menu
     app.add_handler(CallbackQueryHandler(bot_menu, pattern="^bot_menu$"))
     app.add_handler(CallbackQueryHandler(start_game, pattern="^game_type_"))
     app.add_handler(CallbackQueryHandler(play_command, pattern="^play$"))
+    
+    # Payment Redirect
     app.add_handler(CallbackQueryHandler(payment_menu, pattern="^payment_menu$"))
     app.add_handler(CallbackQueryHandler(withdraw_main, pattern="^withdraw_main$"))
+    
+    # Daily Bonus
     app.add_handler(CallbackQueryHandler(daily_bonus_menu, pattern="^daily_bonus_menu$"))
     app.add_handler(CallbackQueryHandler(claim_daily_bonus_handler, pattern="^claim_daily_bonus$"))
+    
+    # History
     app.add_handler(CallbackQueryHandler(history_menu, pattern="^history$"))
     app.add_handler(CallbackQueryHandler(history_page_callback, pattern="^history_page_"))
+    
+    # Top Players
     app.add_handler(CallbackQueryHandler(top_players_menu, pattern="^top_players_menu$"))
     app.add_handler(CallbackQueryHandler(top_activity, pattern="^top_activity$"))
+    
+    # Help & Navigation
     app.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))
     app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_to_main$"))
     app.add_handler(CallbackQueryHandler(noop, pattern="^noop$"))
+    
+    # Profile & Settings
     app.add_handler(CallbackQueryHandler(profile_command, pattern="^profile$"))
     app.add_handler(CallbackQueryHandler(badges_command, pattern="^badges$"))
     app.add_handler(CallbackQueryHandler(settings_command, pattern="^settings$"))
     app.add_handler(CallbackQueryHandler(settings_currency, pattern="^settings_currency$"))
     app.add_handler(CallbackQueryHandler(balance_callback, pattern="^balance$"))
+    
+    # Admin Callbacks
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
     app.add_handler(CallbackQueryHandler(admin_add_balance, pattern="^admin_add_balance$"))
     app.add_handler(CallbackQueryHandler(admin_give_all, pattern="^admin_give_all$"))
     app.add_handler(CallbackQueryHandler(admin_users, pattern="^admin_users$"))
     
+    # Message handler for custom bet
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, challenge_custom_bet_handler))
+    
     print(f"{BRAND_NAME} - Enhanced Game Bot is starting...")
     print(f"👑 Admin: {ADMIN_USERNAME}")
     print(f"💳 Payment Bot: {PAYMENT_BOT_LINK}")
     print("📌 Using shared database: payment_bot.db")
-    print("✅ Features loaded:")
-    print("  • GROUP CHAT SUPPORT ENABLED")
-    print("  • USER RESTRICTION - Each user can only interact with their own menus")
-    print("  • 5 ROLLS 1 WIN FIXED - Both players' rolls and results shown properly")
-    print("  • FLOOD CONTROL - 2 second delays between messages to avoid rate limits")
-    print("  • USD bet amounts: $0.10, $0.30, $0.80, $1, $3, $7, $10")
-    print("  • INR bet amounts: ₹10, ₹20, ₹30, ₹40, ₹50, ₹100, ₹200")
-    print("  • Bot works in both private and group chats")
+    print("✅ Enhanced features loaded:")
+    print("  • Simplified Profile with Badges")
+    print("  • 12-Level System with correct emojis")
+    print("  • Activity Points System with correct wallet amounts")
+    print("  • Top Activity Leaderboard with wallet balances")
+    print("  • Badges System")
+    print("  • Settings Menu")
+    print("  • /play command for game selection")
+    print("  • Custom bet amount fixed and working")
+    print("  • 🔒 PRIVATE CHAT ONLY MODE ENABLED")
+    print("  • Bot only responds in private chats")
+    print("  • WAGER SYSTEM COMPLETELY REMOVED")
     print("✅ Bot is running!")
-    app.run_polling()
-
-if __name__ == '__main__':
-    main()
     
+    # Run the bot
+    app.run_polling()
