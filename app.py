@@ -1,6 +1,6 @@
 import os
 import threading
-from flask import Flask
+from flask import Flask, request
 import main_game_bot
 
 app = Flask(__name__)
