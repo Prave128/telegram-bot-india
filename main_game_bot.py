@@ -4212,6 +4212,7 @@ async def set_commands(app):
 # ============ MAIN ============
 
 def main():
+    # Initialize enhanced database
     init_db_enhanced()
     
     request = HTTPXRequest(
