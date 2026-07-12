@@ -1,6 +1,4 @@
 import logging
-import asyncio
-import sys
 from typing import Dict, Optional, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
@@ -47,7 +45,7 @@ PLATFORM_FEE_PERCENT = 15  # Platform fee 15% (Hidden from users)
 
 # PVP Bet Amounts
 INR_BET_AMOUNTS = [10, 20, 30, 40, 50, 100, 200]
-USD_BET_AMOUNTS = [10, 30, 80, 100, 300, 700, 1000]  # In cents: $0.10, $0.30, $0.80, $1, $3, $7, $10
+USD_BET_AMOUNTS = [1, 2, 3, 4, 10]
 
 # PVP Rounds Options
 ROUNDS_OPTIONS = [
@@ -70,9 +68,6 @@ DICE_EMOJIS = {
 # Challenge timeout (seconds)
 CHALLENGE_TIMEOUT = 120  # 2 minutes
 
-# MESSAGE DELAY to avoid flood control (seconds)
-MESSAGE_DELAY = 2.0
-
 # NEW LEVEL SYSTEM (XP based)
 LEVELS = [
     {"level": 1, "name": "Bronze", "min_xp": 0, "max_xp": 999, "badge": "🥉"},
@@ -89,6 +84,27 @@ LEVELS = [
     {"level": 12, "name": "Immortal", "min_xp": 3000000, "max_xp": float('inf'), "badge": "💠"},
 ]
 
+# ============ DECORATOR FOR PRIVATE CHAT ONLY ============
+
+def private_only(func):
+    """Decorator to restrict command/callback to private chats only"""
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if update.callback_query:
+            chat = update.callback_query.message.chat
+        else:
+            chat = update.effective_chat
+        
+        if chat.type != "private":
+            if update.callback_query:
+                await update.callback_query.answer("❌ Please use this bot in a private chat.", show_alert=True)
+                await update.callback_query.edit_message_text("❌ This bot only works in private chats for security reasons.\n\nPlease start the bot in a private chat: @CasinoPayment26_bot")
+            else:
+                await update.message.reply_text("❌ Please use this bot in a private chat for security reasons.\n\nStart the bot here: @CasinoPayment26_bot")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
 # ============ HELPER FUNCTIONS ============
 
 def get_brand_header():
@@ -100,8 +116,6 @@ def get_brand_header():
 
 def format_currency(amount, currency='INR'):
     symbol = '₹' if currency == 'INR' else '$'
-    if currency == 'USD':
-        return f"{symbol}{amount/100:.2f}"
     return f"{symbol}{amount/100:.2f}"
 
 def get_dice_display(rolls):
@@ -867,7 +881,6 @@ class PVPGameHandler:
     def __init__(self):
         self.active_pvp_games = {}
         self.game_buttons = {}
-        self.user_interactions = {}
     
     def create_pvp_game(self, game_id, challenger_id, challenged_id, rounds_type, rolls, bet_amount, currency):
         self.active_pvp_games[game_id] = {
@@ -901,19 +914,8 @@ class PVPGameHandler:
             'challenged_id': challenged_id
         }
         
-        self.user_interactions[game_id] = {
-            'challenger_id': challenger_id,
-            'challenged_id': challenged_id
-        }
-        
         logging.info(f"PVP Game Created: {game_id}")
         return self.active_pvp_games[game_id]
-    
-    def is_user_allowed(self, game_id, user_id):
-        if game_id not in self.user_interactions:
-            return False
-        return (self.user_interactions[game_id]['challenger_id'] == user_id or 
-                self.user_interactions[game_id]['challenged_id'] == user_id)
     
     def get_game(self, game_id):
         return self.active_pvp_games.get(game_id)
@@ -945,7 +947,6 @@ class PVPGameHandler:
     
     async def send_telegram_dice(self, bot, chat_id):
         try:
-            await asyncio.sleep(MESSAGE_DELAY)
             message = await bot.send_dice(chat_id=chat_id, emoji="🎲")
             return message.dice.value
         except Exception as e:
@@ -956,9 +957,6 @@ class PVPGameHandler:
         game = self.active_pvp_games.get(game_id)
         if not game:
             return {'error': 'Game not found!'}
-        
-        if not self.is_user_allowed(game_id, user_id):
-            return {'error': 'You are not part of this game!'}
         
         if not game['is_active']:
             return {'error': 'Game is already over!'}
@@ -987,7 +985,6 @@ class PVPGameHandler:
             game['player1_total'] += roll_value
             game['player1_roll_count'] += 1
             player_name = game.get('challenger_name', 'Player 1')
-            player_label = "Player 1"
         else:
             if game['player2_roll_count'] >= game['total_rolls']:
                 game['roll_in_progress'] = False
@@ -996,7 +993,6 @@ class PVPGameHandler:
             game['player2_total'] += roll_value
             game['player2_roll_count'] += 1
             player_name = game.get('challenged_name', 'Player 2')
-            player_label = "Player 2"
         
         player_completed = False
         if user_id == game['challenger_id']:
@@ -1013,18 +1009,17 @@ class PVPGameHandler:
         total_score = game['player1_total'] if user_id == game['challenger_id'] else game['player2_total']
         
         message = f"🎲 **{player_name} rolled:** {dice_emoji} **{roll_value}**\n\n"
-        message += f"📊 **{player_label} rolls:** {roll_history} {roll_numbers}\n"
+        message += f"📊 **Your rolls:** {roll_history} {roll_numbers}\n"
         message += f"📈 **Total so far:** **{total_score}**\n"
         
         if player_completed:
-            message += f"\n✅ **{player_name} completed all {game['total_rolls']} rolls!**"
+            message += f"\n✅ **You completed all {game['total_rolls']} rolls!**"
             other_id = self.get_other_player(game, user_id)
             other_rolls = game['player2_roll_count'] if user_id == game['challenger_id'] else game['player1_roll_count']
             
             if other_rolls < game['total_rolls']:
                 game['current_turn'] = other_id
                 other_name = game.get('challenged_name', 'Player 2') if user_id == game['challenger_id'] else game.get('challenger_name', 'Player 1')
-                other_label = "Player 2" if user_id == game['challenger_id'] else "Player 1"
                 message += f"\n\n🔄 Now it's **{other_name}'s turn** to roll!"
                 game['roll_in_progress'] = False
                 
@@ -1040,9 +1035,7 @@ class PVPGameHandler:
                     'game_over': False,
                     'switch_turn': True,
                     'next_player_id': other_id,
-                    'next_player_name': other_name,
-                    'next_player_label': other_label,
-                    'send_roll_button': True
+                    'next_player_name': other_name
                 }
             else:
                 game['game_over'] = True
@@ -1175,8 +1168,6 @@ class PVPGameHandler:
             del self.active_pvp_games[game_id]
         if game_id in self.game_buttons:
             del self.game_buttons[game_id]
-        if game_id in self.user_interactions:
-            del self.user_interactions[game_id]
 
 pvp_handler = PVPGameHandler()
 
@@ -1721,16 +1712,15 @@ class BowlingGame:
 
 # ============ PROFILE COMMANDS ============
 
+@private_only
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show simplified user profile - Only Badges"""
     user = update.effective_user
     
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != user.id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
+        user = query.from_user
         message = query.message
         edit_mode = True
     else:
@@ -1750,20 +1740,24 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_admin = "👑" if user_id == ADMIN_USER_ID else ""
     username_display = f"@{user.username}" if user.username else profile['username']
     
+    # Get level info
     xp = profile.get('experience', 0)
     level_info = get_level_info(xp)
     level = level_info["level"]
     level_badge = level_info["badge"]
     level_name = level_info["name"]
     
+    # Get stats
     total_games = profile.get('total_games', 0)
     total_wins = profile.get('total_wins', 0)
     win_streak = profile.get('win_streak', 0)
     rating = profile.get('rating', 0)
     
+    # Get daily bonus info
     bonus_info = get_daily_bonus_info(user_id)
     bonus_status = "✅ Claim Now!" if bonus_info['can_claim'] else f"⏳ Day {bonus_info['streak']+1}/3"
     
+    # Simplified profile display
     text = f"""
 {get_brand_header()}
 
@@ -1796,16 +1790,15 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await message.reply_text(text, reply_markup=reply_markup)
 
+@private_only
 async def badges_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user badges"""
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     profile = get_user_profile(user_id)
+    
     if not profile:
         await query.edit_message_text("❌ Profile not found!")
         return
@@ -1857,17 +1850,16 @@ Total Badges: {len(badges)}/12
     
     keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data="profile")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(text, reply_markup=reply_markup)
 
 # ============ TOP PLAYERS COMMANDS ============
 
+@private_only
 async def top_players_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show top players menu - Only Activity"""
     query = update.callback_query
     if query:
-        user_id = update.effective_user.id
-        if query.from_user.id != user_id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
         message = query.message
         edit_mode = True
@@ -1896,15 +1888,13 @@ Players are ranked by daily activity points.
     else:
         await message.reply_text(text, reply_markup=reply_markup)
 
+@private_only
 async def top_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show top players by daily activity with correct wallet amounts"""
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     top_users = get_top_activity(10)
     
     if not top_users:
@@ -1929,12 +1919,13 @@ Play games to earn activity points!
     emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
     
     for idx, user in enumerate(top_users, 1):
-        uid = user[0]
-        username = user[1] or user[2] or f"User{uid}"
+        user_id = user[0]
+        username = user[1] or user[2] or f"User{user_id}"
         daily_activity = user[3]
         currency = user[4] or 'INR'
         symbol = '₹' if currency == 'INR' else '$'
         
+        # Get wallet balance correctly from database
         if currency == 'INR':
             wallet_balance = (user[5] if len(user) > 5 else 0) / 100
         else:
@@ -1943,6 +1934,7 @@ Play games to earn activity points!
         emoji = emojis[idx - 1] if idx <= len(emojis) else f"{idx}."
         text += f"\n{emoji} {username} — {daily_activity} pts · {symbol}{wallet_balance:,.2f}"
     
+    # Get user's rank
     rank, daily_activity = get_user_activity_rank(user_id)
     
     if rank > 0:
@@ -1959,19 +1951,20 @@ Play games to earn activity points!
         [InlineKeyboardButton("🔙 Back", callback_data="top_players_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(text, reply_markup=reply_markup)
 
 # ============ SETTINGS COMMANDS ============
 
+@private_only
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show settings menu"""
     user = update.effective_user
     
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != user.id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
+        user = query.from_user
         message = query.message
         edit_mode = True
     else:
@@ -2014,13 +2007,10 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await message.reply_text(text, reply_markup=reply_markup)
 
+@private_only
 async def settings_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Change currency in settings"""
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     keyboard = [
@@ -2057,15 +2047,15 @@ logger = logging.getLogger(__name__)
 
 # ============ BOT HANDLERS ============
 
+@private_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command - Main menu"""
     user = update.effective_user
     
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != user.id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
+        user = query.from_user
         message = query.message
         edit_mode = True
     else:
@@ -2101,6 +2091,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_admin = "👑" if user.id == ADMIN_USER_ID else ""
     username_display = f"@{user.username}" if user.username else first_name
     
+    # Get level info
     xp = profile.get('experience', 0)
     level_info = get_level_info(xp)
     level = level_info["level"]
@@ -2179,15 +2170,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await message.reply_text(profile_text, reply_markup=reply_markup)
 
+@private_only
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show game selection menu"""
     user = update.effective_user
     
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != user.id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
+        user = query.from_user
         message = query.message
         edit_mode = True
     else:
@@ -2225,13 +2216,9 @@ Select a game mode:
     else:
         await message.reply_text(text, reply_markup=reply_markup)
 
+@private_only
 async def bot_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     keyboard = [
@@ -2255,13 +2242,9 @@ Prize: ₹17 (85% of pot)
         reply_markup=reply_markup
     )
 
+@private_only
 async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     data_parts = query.data.split('_')
@@ -2271,6 +2254,7 @@ async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     game_type = data_parts[2]
     mode = data_parts[3]
+    user_id = update.effective_user.id
     
     if mode == 'bot':
         currency = get_user_currency(user_id)
@@ -2317,15 +2301,12 @@ Use /roll to play!
 
 # ============ CHALLENGE COMMANDS ============
 
+@private_only
 async def challenge_step1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     currency = get_user_currency(user_id)
     symbol = '₹' if currency == 'INR' else '$'
     
@@ -2357,32 +2338,23 @@ Please finish your current game first.
         return
     
     keyboard = []
-    if currency == 'INR':
-        bet_amounts = INR_BET_AMOUNTS
-    else:
-        bet_amounts = USD_BET_AMOUNTS
+    bet_amounts = INR_BET_AMOUNTS if currency == 'INR' else USD_BET_AMOUNTS
     
     row = []
     for i, amount in enumerate(bet_amounts):
-        if currency == 'USD':
-            display = f"{symbol}{amount/100:.2f}"
-        else:
-            display = f"{symbol}{amount}"
-        row.append(InlineKeyboardButton(display, callback_data=f"challenge_bet_{amount}"))
+        row.append(InlineKeyboardButton(f"{symbol}{amount}", callback_data=f"challenge_bet_{amount}"))
         if (i + 1) % 3 == 0:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
     
+    keyboard.append([InlineKeyboardButton("✏️ Custom Amount", callback_data="challenge_custom_bet")])
     keyboard.append([InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if currency == 'INR':
-        min_bet = min(bet_amounts)
-        max_bet = max(bet_amounts)
-        text = f"""
+    text = f"""
 {get_brand_header()}
 
 💰 **STEP 1: Select Bet Amount**
@@ -2390,68 +2362,120 @@ Please finish your current game first.
 Select how much each player will bet:
 
 💰 Currency: {currency}
-📌 Min: {symbol}{min_bet}
-📌 Max: {symbol}{max_bet}
-
-💡 Winner gets the total pot!
-    """
-    else:
-        min_bet = min(bet_amounts) / 100
-        max_bet = max(bet_amounts) / 100
-        text = f"""
-{get_brand_header()}
-
-💰 **STEP 1: Select Bet Amount**
-
-Select how much each player will bet:
-
-💰 Currency: {currency}
-📌 Min: {symbol}{min_bet:.2f}
-📌 Max: {symbol}{max_bet:.2f}
+📌 Min: {symbol}{min(bet_amounts)}
+📌 Max: {symbol}{max(bet_amounts)}
 
 💡 Winner gets the total pot!
     """
     
     await query.edit_message_text(text, reply_markup=reply_markup)
 
+@private_only
 async def challenge_bet_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
-    bet_amount = int(query.data.replace('challenge_bet_', ''))
+    data = query.data
+    
+    if data == "challenge_custom_bet":
+        # Clear any existing state and set awaiting flag
+        context.user_data['awaiting_custom_bet'] = True
+        context.user_data['challenge_bet'] = None
+        context.user_data['challenge_currency'] = get_user_currency(update.effective_user.id)
+        
+        await query.edit_message_text(
+            f"""
+{get_brand_header()}
+
+✏️ **Custom Bet Amount**
+
+Please send the bet amount as a message.
+
+📌 Valid amounts:
+• INR: 5 - 200
+• USD: 1 - 10
+
+Example: Send `75` for ₹75
+
+⏳ You have 60 seconds to respond.
+            """
+        )
+        return
+    
+    bet_amount = int(data.replace('challenge_bet_', ''))
     context.user_data['challenge_bet'] = bet_amount
-    context.user_data['challenge_currency'] = get_user_currency(user_id)
+    context.user_data['challenge_currency'] = get_user_currency(update.effective_user.id)
+    context.user_data['awaiting_custom_bet'] = False
     
     await challenge_step2(update, context)
 
+@private_only
+async def challenge_custom_bet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom bet amount input - FIXED"""
+    # Check if we're expecting a custom bet
+    if not context.user_data.get('awaiting_custom_bet'):
+        return
+    
+    try:
+        # Get the message text
+        text = update.message.text.strip()
+        amount = int(text)
+        
+        if amount <= 0:
+            await update.message.reply_text("❌ Amount must be greater than 0!")
+            return
+        
+        currency = context.user_data.get('challenge_currency', get_user_currency(update.effective_user.id))
+        
+        # Set max based on currency
+        if currency == 'INR':
+            max_amount = 200
+            min_amount = 5
+        else:
+            max_amount = 10
+            min_amount = 1
+        
+        if amount > max_amount:
+            await update.message.reply_text(f"❌ Maximum amount is {max_amount} for {currency}!")
+            return
+        
+        if amount < min_amount:
+            await update.message.reply_text(f"❌ Minimum amount is {min_amount} for {currency}!")
+            return
+        
+        # Store the custom bet
+        context.user_data['challenge_bet'] = amount
+        context.user_data['challenge_currency'] = currency
+        context.user_data['awaiting_custom_bet'] = False
+        
+        # Send confirmation and proceed to step 2
+        await update.message.reply_text(f"✅ Custom bet of {currency} {amount} set!")
+        
+        # Create a fake query to continue the flow
+        class FakeQuery:
+            def __init__(self, message):
+                self.message = message
+            async def edit_message_text(self, text, reply_markup=None):
+                await self.message.reply_text(text, reply_markup=reply_markup)
+            async def answer(self):
+                pass
+        
+        fake_query = FakeQuery(update.message)
+        update.callback_query = fake_query
+        
+        await challenge_step2(update, context)
+        
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid number!\n\nExample: 75")
+
+@private_only
 async def challenge_step2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     bet_amount = context.user_data.get('challenge_bet', 10)
     currency = context.user_data.get('challenge_currency', 'INR')
     symbol = '₹' if currency == 'INR' else '$'
-    
-    if currency == 'USD':
-        bet_display = bet_amount / 100
-        pot_display = (bet_amount * 2) / 100
-        bet_str = f"{bet_display:.2f}"
-        pot_str = f"{pot_display:.2f}"
-    else:
-        bet_display = bet_amount
-        pot_display = bet_amount * 2
-        bet_str = str(bet_display)
-        pot_str = str(pot_display)
     
     keyboard = []
     for option in ROUNDS_OPTIONS:
@@ -2469,8 +2493,8 @@ async def challenge_step2(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🎯 **STEP 2: Select Rounds**
 
-Each Player Bet: {symbol}{bet_str}
-Total Pot: {symbol}{pot_str}
+Each Player Bet: {symbol}{bet_amount}
+Total Pot: {symbol}{bet_amount * 2}
 
 Choose how many rolls each player gets:
 
@@ -2484,16 +2508,13 @@ Choose how many rolls each player gets:
     
     await query.edit_message_text(text, reply_markup=reply_markup)
 
+@private_only
 async def challenge_rounds_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     rounds_key = query.data.replace('challenge_rounds_', '')
+    
     rounds_detail = next((r for r in ROUNDS_OPTIONS if r['key'] == rounds_key), None)
     rolls = rounds_detail['rolls'] if rounds_detail else 3
     
@@ -2502,13 +2523,9 @@ async def challenge_rounds_selected(update: Update, context: ContextTypes.DEFAUL
     
     await challenge_step3(update, context)
 
+@private_only
 async def challenge_step3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     bet_amount = context.user_data.get('challenge_bet', 10)
@@ -2516,17 +2533,6 @@ async def challenge_step3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rolls = context.user_data.get('challenge_rolls', 3)
     currency = context.user_data.get('challenge_currency', 'INR')
     symbol = '₹' if currency == 'INR' else '$'
-    
-    if currency == 'USD':
-        bet_display = bet_amount / 100
-        pot_display = (bet_amount * 2) / 100
-        bet_str = f"{bet_display:.2f}"
-        pot_str = f"{pot_display:.2f}"
-    else:
-        bet_display = bet_amount
-        pot_display = bet_amount * 2
-        bet_str = str(bet_display)
-        pot_str = str(pot_display)
     
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="challenge_step2")]
@@ -2539,8 +2545,8 @@ async def challenge_step3(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 **STEP 3: Challenge a Player**
 
 📋 **Your Challenge Details:**
-💰 Each Player Bet: {symbol}{bet_str}
-💰 Total Pot: {symbol}{pot_str}
+💰 Each Player Bet: {symbol}{bet_amount}
+💰 Total Pot: {symbol}{bet_amount * 2}
 📋 Rounds: {rounds_key.upper()} ({rolls} rolls each)
 🌐 Currency: {currency}
 
@@ -2555,6 +2561,9 @@ Example: `/challenge @john`
     
     await query.edit_message_text(text, reply_markup=reply_markup)
 
+# ============ CHALLENGE COMMAND ============
+
+@private_only
 async def challenge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -2662,35 +2671,20 @@ Example: /challenge @john
         min_balance = bet_amount * 100
         
         if bal1 < min_balance:
-            if currency == 'USD':
-                await update.message.reply_text(f"❌ You need {symbol}{bet_amount/100:.2f} to play!\nYour balance: {symbol}{bal1/100:.2f}")
-            else:
-                await update.message.reply_text(f"❌ You need {symbol}{bet_amount} to play!\nYour balance: {symbol}{bal1/100:.2f}")
+            await update.message.reply_text(f"❌ You need {symbol}{bet_amount} to play!\nYour balance: {symbol}{bal1/100:.2f}")
             return
         
         if bal2 < min_balance:
-            if currency == 'USD':
-                await update.message.reply_text(
-                    f"""
-❌ @{mentioned} doesn't have enough balance!
-
-Their balance: {symbol}{bal2/100:.2f}
-Need: {symbol}{bet_amount/100:.2f}
-
-💡 Ask them to deposit or play games to earn balance.
-                    """
-                )
-            else:
-                await update.message.reply_text(
-                    f"""
+            await update.message.reply_text(
+                f"""
 ❌ @{mentioned} doesn't have enough balance!
 
 Their balance: {symbol}{bal2/100:.2f}
 Need: {symbol}{bet_amount}
 
 💡 Ask them to deposit or play games to earn balance.
-                    """
-                )
+                """
+            )
             return
         
         update_wallet(user_id, -min_balance, currency)
@@ -2716,15 +2710,6 @@ Need: {symbol}{bet_amount}
         sender_name = update.effective_user.username or update.effective_user.first_name
         target_name = target.username or target.first_name or mentioned
         
-        if currency == 'USD':
-            bet_display = bet_amount / 100
-            pot_display = (bet_amount * 2) / 100
-            bet_str = f"{bet_display:.2f}"
-            pot_str = f"{pot_display:.2f}"
-        else:
-            bet_str = str(bet_amount)
-            pot_str = str(bet_amount * 2)
-        
         keyboard = [
             [
                 InlineKeyboardButton("✅ Accept", callback_data=f"accept_{challenge_id}"),
@@ -2741,8 +2726,8 @@ Need: {symbol}{bet_amount}
 From: @{sender_name}
 To: @{target_name}
 Game: Dice PVP
-Each Player Bet: {symbol}{bet_str}
-Total Pot: {symbol}{pot_str}
+Each Player Bet: {symbol}{bet_amount}
+Total Pot: {symbol}{bet_amount * 2}
 Rounds: {rounds_key.upper()} ({rolls} rolls each)
 
 💰 Winner gets the total pot!
@@ -2764,6 +2749,7 @@ Rounds: {rounds_key.upper()} ({rolls} rolls each)
         context.user_data.pop('challenge_rounds', None)
         context.user_data.pop('challenge_rolls', None)
         context.user_data.pop('challenge_currency', None)
+        context.user_data.pop('awaiting_custom_bet', None)
         
         async def auto_decline():
             await asyncio.sleep(CHALLENGE_TIMEOUT)
@@ -2791,25 +2777,13 @@ Rounds: {rounds_key.upper()} ({rolls} rolls each)
 
 # ============ CHALLENGE RESPONSE HANDLER ============
 
+@private_only
 async def handle_challenge_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
     chat_id = query.message.chat_id
     
     data = query.data
-    
-    if data.startswith('accept_'):
-        challenge_id = data.replace('accept_', '')
-        challenge = game_manager.get_pending_challenge(challenge_id)
-        if challenge and challenge['challenged_id'] != user_id:
-            await query.answer("🚫 This challenge is not for you!", show_alert=True)
-            return
-    elif data.startswith('decline_'):
-        challenge_id = data.replace('decline_', '')
-        challenge = game_manager.get_pending_challenge(challenge_id)
-        if challenge and challenge['challenged_id'] != user_id:
-            await query.answer("🚫 This challenge is not for you!", show_alert=True)
-            return
     
     if data.startswith('accept_'):
         action = 'accept'
@@ -2855,15 +2829,6 @@ async def handle_challenge_response(update: Update, context: ContextTypes.DEFAUL
         game_id = result['game_id']
         bet_amount = challenge['bet_amount']
         
-        if challenge.get('currency') == 'USD':
-            bet_display = bet_amount / 100
-            pot_display = (bet_amount * 2) / 100
-            bet_str = f"{bet_display:.2f}"
-            pot_str = f"{pot_display:.2f}"
-        else:
-            bet_str = str(bet_amount)
-            pot_str = str(bet_amount * 2)
-        
         await query.edit_message_text(
             f"""
 {get_brand_header()}
@@ -2873,8 +2838,8 @@ async def handle_challenge_response(update: Update, context: ContextTypes.DEFAUL
 🎲 **PVP Dice Game Starting!**
 
 👤 {p1_name} vs 👤 {p2_name}
-💰 Each Player Bet: {symbol}{bet_str}
-💰 Total Pot: {symbol}{pot_str}
+💰 Each Player Bet: {symbol}{bet_amount}
+💰 Total Pot: {symbol}{bet_amount * 2}
 📋 Rounds: {challenge.get('rounds_type', '3R1W').upper()} ({challenge.get('rolls', 3)} rolls each)
 
 🔄 **{p1_name}'s turn to roll!**
@@ -2886,7 +2851,6 @@ Click the ROLL button below:
         roll_button = [[InlineKeyboardButton("🎲 ROLL DICE NOW!", callback_data=f"pvp_roll_{game_id}")]]
         roll_markup = InlineKeyboardMarkup(roll_button)
         
-        await asyncio.sleep(MESSAGE_DELAY)
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"""
@@ -2899,7 +2863,6 @@ Click the button below to roll the animated dice:
             reply_markup=roll_markup
         )
         
-        await asyncio.sleep(MESSAGE_DELAY)
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"""
@@ -2935,6 +2898,7 @@ You'll get your turn after they finish.
 
 # ============ PVP ROLL ============
 
+@private_only
 async def pvp_roll_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -2943,17 +2907,11 @@ async def pvp_roll_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     game_id = data.replace('pvp_roll_', '')
     
-    # Check if user is allowed to interact with this game
-    if not pvp_handler.is_user_allowed(game_id, user_id):
-        await query.answer("🚫 You are not part of this game!", show_alert=True)
-        return
-    
     pvp_game = pvp_handler.get_game(game_id)
     if not pvp_game:
         await query.edit_message_text("❌ Game not found or already ended!")
         return
     
-    # Check if it's the user's turn
     if pvp_game['current_turn'] != user_id:
         current_name = pvp_handler.get_current_player_name(pvp_game)
         await query.answer(f"🚫 Not your turn! It's {current_name}'s turn.", show_alert=True)
@@ -2972,7 +2930,6 @@ async def pvp_roll_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⏳ Roll in progress! Please wait...", show_alert=True)
         return
     
-    # Check if user has completed all rolls
     if user_id == pvp_game['challenger_id']:
         if pvp_game['player1_roll_count'] >= pvp_game['total_rolls']:
             await query.edit_message_text("❌ You have already completed all your rolls!")
@@ -2982,70 +2939,16 @@ async def pvp_roll_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ You have already completed all your rolls!")
             return
     
-    # Send rolling message with delay
-    await asyncio.sleep(MESSAGE_DELAY)
     await query.edit_message_text("🎲 Rolling animated dice... Please wait!", reply_markup=None)
     
-    # Make the roll
     result = await pvp_handler.make_roll(game_id, user_id, context.bot, chat_id)
     
     if 'error' in result:
         roll_button = [[InlineKeyboardButton("🎲 ROLL DICE NOW!", callback_data=f"pvp_roll_{game_id}")]]
         roll_markup = InlineKeyboardMarkup(roll_button)
-        await asyncio.sleep(MESSAGE_DELAY)
         await query.edit_message_text(f"❌ {result['error']}", reply_markup=roll_markup)
         return
     
-    # Handle roll result - NOT GAME OVER
-    if not result.get('game_over'):
-        # Update the current message with the roll result with delay
-        await asyncio.sleep(MESSAGE_DELAY)
-        await query.edit_message_text(result['message'])
-        
-        # Check if we need to switch turns
-        if result.get('switch_turn') and result.get('next_player_id'):
-            next_id = result['next_player_id']
-            next_name = result['next_player_name']
-            
-            # Send the roll button to the next player
-            roll_button = [[InlineKeyboardButton("🎲 ROLL DICE NOW!", callback_data=f"pvp_roll_{game_id}")]]
-            roll_markup = InlineKeyboardMarkup(roll_button)
-            
-            await asyncio.sleep(MESSAGE_DELAY)
-            
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"""
-{get_brand_header()}
-
-🎲 @{next_name}, it's your turn to roll!
-
-Click the button below to roll the animated dice:
-                """,
-                reply_markup=roll_markup
-            )
-            
-            await asyncio.sleep(MESSAGE_DELAY)
-            
-            # Notify the current player that their turn is over
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"""
-{get_brand_header()}
-
-⏳ You have completed your rolls. Waiting for @{next_name} to finish.
-                """
-            )
-        else:
-            # Same player rolls again
-            roll_button = [[InlineKeyboardButton("🎲 ROLL AGAIN", callback_data=f"pvp_roll_{game_id}")]]
-            roll_markup = InlineKeyboardMarkup(roll_button)
-            await asyncio.sleep(MESSAGE_DELAY)
-            await query.edit_message_text(result['message'], reply_markup=roll_markup)
-        
-        return
-    
-    # ============ GAME OVER - SHOW RESULT ============
     if result.get('game_over') and result.get('result'):
         game_result = result['result']
         
@@ -3059,28 +2962,6 @@ Click the button below to roll the animated dice:
         winner_name = game_result.get('winner_name', 'Unknown')
         loser_name = game_result.get('loser_name', 'Unknown')
         
-        symbol = '₹' if currency == 'INR' else '$'
-        
-        # Format values for display
-        if currency == 'USD':
-            winner_amount_display = f"{winner_amount:.2f}"
-            bet_display = f"{bet_amount:.2f}"
-            total_pot_display = f"{total_pot:.2f}"
-        else:
-            winner_amount_display = str(winner_amount)
-            bet_display = str(bet_amount)
-            total_pot_display = str(total_pot)
-        
-        # Show both players' rolls
-        p1_rolls_str = ' '.join([f"{DICE_EMOJIS.get(r, '🎲')}" for r in game_result['player1_rolls']])
-        p1_rolls_num = f"({', '.join(map(str, game_result['player1_rolls']))})"
-        p2_rolls_str = ' '.join([f"{DICE_EMOJIS.get(r, '🎲')}" for r in game_result['player2_rolls']])
-        p2_rolls_num = f"({', '.join(map(str, game_result['player2_rolls']))})"
-        
-        p1_name_display = pvp_game.get('challenger_name', 'Player 1')
-        p2_name_display = pvp_game.get('challenged_name', 'Player 2')
-        
-        # Handle winner
         if winner_id:
             winner_prize = winner_amount * 100
             update_wallet(winner_id, winner_prize, currency)
@@ -3089,7 +2970,7 @@ Click the button below to roll the animated dice:
                 winner_balance = get_user_balance(winner_id, currency) / 100
                 loser_balance = get_user_balance(loser_id, currency) / 100
                 
-                # Update stats for both players
+                # IMPORTANT: Update stats for both players
                 update_user_stats(winner_id, won=True, bet_amount=bet_amount, currency=currency, game_type='dice')
                 update_user_stats(loser_id, won=False, bet_amount=bet_amount, currency=currency, game_type='dice')
                 
@@ -3121,7 +3002,8 @@ Click the button below to roll the animated dice:
                     'player2_total': game_result['player2_total']
                 })
                 
-                # Create winner message
+                symbol = '₹' if currency == 'INR' else '$'
+                
                 winner_msg = f"""
 {get_brand_header()}
 
@@ -3130,24 +3012,25 @@ Click the button below to roll the animated dice:
 🎉 **{winner_name} WINS!** 🎉
 
 📊 **Final Scores:**
-👤 {p1_name_display}: **{game_result['player1_total']}** - {p1_rolls_str} {p1_rolls_num}
-👤 {p2_name_display}: **{game_result['player2_total']}** - {p2_rolls_str} {p2_rolls_num}
+👤 {winner_name}: **{game_result['player1_total'] if winner_id == pvp_game['challenger_id'] else game_result['player2_total']}**
+👤 {loser_name}: **{game_result['player2_total'] if winner_id == pvp_game['challenger_id'] else game_result['player1_total']}**
 
-💰 **Each Player Bet:** {symbol}{bet_display}
-💰 **Total Pot:** {symbol}{total_pot_display}
-🏆 **Winner Gets:** {symbol}{winner_amount_display}
+💰 **Each Player Bet:** {symbol}{bet_amount}
+💰 **Total Pot:** {symbol}{total_pot}
+🏆 **Winner Gets:** {symbol}{winner_amount}
 📌 **{loser_name} Gets:** {symbol}0
 
 💰 **Updated Balances:**
-👤 {winner_name}: {symbol}{winner_balance:.2f} ✅ (+{symbol}{winner_amount_display})
-👤 {loser_name}: {symbol}{loser_balance:.2f} ❌ (-{symbol}{bet_display})
+👤 {winner_name}: {symbol}{winner_balance:.2f} ✅ (+{symbol}{winner_amount})
+👤 {loser_name}: {symbol}{loser_balance:.2f} ❌ (-{symbol}{bet_amount})
 
 💡 Start a new game with /start
                 """
                 
-                # Send the winner message with delay
-                await asyncio.sleep(MESSAGE_DELAY)
-                await query.edit_message_text(winner_msg)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=winner_msg
+                )
                 
         elif game_result.get('is_draw'):
             bet_amount_paise = bet_amount * 100
@@ -3175,8 +3058,12 @@ Click the button below to roll the animated dice:
                 'player2_total': game_result['player2_total']
             })
             
+            p1_name = pvp_game.get('challenger_name', 'Player 1')
+            p2_name = pvp_game.get('challenged_name', 'Player 2')
+            
             p1_balance = get_user_balance(pvp_game['challenger_id'], currency) / 100
             p2_balance = get_user_balance(pvp_game['challenged_id'], currency) / 100
+            symbol = '₹' if currency == 'INR' else '$'
             
             draw_msg = f"""
 {get_brand_header()}
@@ -3185,37 +3072,60 @@ Click the button below to roll the animated dice:
 
 Both players tied!
 
-📊 **Final Scores:**
-👤 {p1_name_display}: **{game_result['player1_total']}** - {p1_rolls_str} {p1_rolls_num}
-👤 {p2_name_display}: **{game_result['player2_total']}** - {p2_rolls_str} {p2_rolls_num}
+👤 {p1_name}: **{game_result['player1_total']}**
+👤 {p2_name}: **{game_result['player2_total']}**
 
 💰 Both players get their money back!
 
 💰 **Updated Balances:**
-👤 {p1_name_display}: {symbol}{p1_balance:.2f}
-👤 {p2_name_display}: {symbol}{p2_balance:.2f}
+👤 {p1_name}: {symbol}{p1_balance:.2f}
+👤 {p2_name}: {symbol}{p2_balance:.2f}
 
 💡 Start a new game with /start
             """
             
-            await asyncio.sleep(MESSAGE_DELAY)
-            await query.edit_message_text(draw_msg)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=draw_msg
+            )
         
-        # End the game
         pvp_handler.end_game(game_id)
         game_manager.end_game(game_id)
+        return
+    
+    if result.get('switch_turn') and result.get('next_player_id'):
+        next_id = result['next_player_id']
+        next_name = result['next_player_name']
+        
+        await query.edit_message_text(result['message'])
+        
+        roll_button = [[InlineKeyboardButton("🎲 ROLL DICE NOW!", callback_data=f"pvp_roll_{game_id}")]]
+        roll_markup = InlineKeyboardMarkup(roll_button)
+        
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"""
+{get_brand_header()}
+
+🎲 @{next_name}, it's your turn to roll!
+
+Click the button below to roll the animated dice:
+            """,
+            reply_markup=roll_markup
+        )
+    else:
+        roll_button = [[InlineKeyboardButton("🎲 ROLL AGAIN", callback_data=f"pvp_roll_{game_id}")]]
+        roll_markup = InlineKeyboardMarkup(roll_button)
+        await query.edit_message_text(result['message'], reply_markup=roll_markup)
 
 # ============ OTHER COMMANDS ============
 
+@private_only
 async def balance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     currency = get_user_currency(user_id)
     symbol = '₹' if currency == 'INR' else '$'
     balance = get_user_balance(user_id, currency) / 100
@@ -3243,6 +3153,7 @@ async def balance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+@private_only
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     currency = get_user_currency(user.id)
@@ -3263,6 +3174,7 @@ Use /withdraw to cash out
         """
     )
 
+@private_only
 async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"""
@@ -3285,13 +3197,9 @@ Click the button below to go to the payment bot:
         ])
     )
 
+@private_only
 async def withdraw_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     keyboard = [
@@ -3319,13 +3227,9 @@ Click the button below to go to the payment bot:
         reply_markup=reply_markup
     )
 
+@private_only
 async def payment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     keyboard = [
@@ -3368,12 +3272,10 @@ Click the button below to go to the payment bot:
         reply_markup=reply_markup
     )
 
+@private_only
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != update.effective_user.id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
         message = query.message
         edit_mode = True
@@ -3394,6 +3296,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /challenge @username - Challenge a player
 /roll - Roll dice (in active game)
 /balance or /bal - Check your balance
+/stats - View your statistics
 /history - View game history
 /top - View top players
 
@@ -3444,15 +3347,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await message.reply_text(help_text, reply_markup=reply_markup)
 
+@private_only
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != user_id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
         profile = get_user_profile(user_id)
         
@@ -3559,6 +3460,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(stats_text)
 
+@private_only
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -3575,9 +3477,6 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.callback_query:
         query = update.callback_query
-        if query.from_user.id != user_id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
         total_games = get_total_history_count(user_id)
         games = get_game_history(user_id, per_page, offset)
@@ -3711,13 +3610,9 @@ Start a game with /start → Challenge Player
     
     await update.message.reply_text(text)
 
+@private_only
 async def history_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     page = int(query.data.replace('history_page_', ''))
@@ -3725,10 +3620,12 @@ async def history_page_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     await history_command(update, context)
 
+@private_only
 async def history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.args = ['1']
     await history_command(update, context)
 
+@private_only
 async def claim_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
@@ -3761,15 +3658,12 @@ Come back tomorrow.
             """
         )
 
+@private_only
 async def daily_bonus_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     bonus_info = get_daily_bonus_info(user_id)
     
     keyboard = [
@@ -3813,14 +3707,12 @@ async def daily_bonus_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+@private_only
 async def claim_daily_bonus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
+    
+    user_id = update.effective_user.id
     
     success, message = db_claim_daily_bonus(user_id)
     
@@ -3857,30 +3749,27 @@ Come back tomorrow.
             reply_markup=reply_markup
         )
 
+@private_only
 async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
-        if query.from_user.id != update.effective_user.id:
-            await query.answer("🚫 This is not your menu!", show_alert=True)
-            return
         await query.answer()
     await start(update, context)
 
+@private_only
 async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         await query.answer()
 
+@private_only
 async def set_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
     currency = query.data.replace('currency_', '')
+    user_id = update.effective_user.id
+    
     set_user_currency(user_id, currency)
     
     await query.edit_message_text(f"✅ Currency set to {currency}!")
@@ -3888,15 +3777,12 @@ async def set_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ ADMIN PANEL ============
 
+@private_only
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     if user_id != ADMIN_USER_ID:
         await query.edit_message_text("❌ Unauthorized!")
         return
@@ -3922,15 +3808,12 @@ Select an option:
         reply_markup=reply_markup
     )
 
+@private_only
 async def admin_add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     if user_id != ADMIN_USER_ID:
         await query.edit_message_text("❌ Unauthorized!")
         return
@@ -3948,6 +3831,7 @@ Amount is in user's currency (INR or USD)
         """
     )
 
+@private_only
 async def admin_addbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
@@ -4000,15 +3884,12 @@ async def admin_addbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"{get_brand_header()}\n\n✅ {symbol}{amount} added to your wallet by admin!"
     )
 
+@private_only
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     if user_id != ADMIN_USER_ID:
         await query.edit_message_text("❌ Unauthorized!")
         return
@@ -4043,15 +3924,12 @@ async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup)
 
+@private_only
 async def admin_give_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    if query.from_user.id != user_id:
-        await query.answer("🚫 This is not your menu!", show_alert=True)
-        return
     await query.answer()
     
+    user_id = update.effective_user.id
     if user_id != ADMIN_USER_ID:
         await query.edit_message_text("❌ Unauthorized!")
         return
@@ -4077,6 +3955,7 @@ async def admin_give_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"❌ Error: {str(e)}")
 
+@private_only
 async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text("❌ Usage: /tip @username amount")
@@ -4142,6 +4021,7 @@ async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
+@private_only
 async def roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
@@ -4330,7 +4210,11 @@ def main():
     print("  • 🔒 PRIVATE CHAT ONLY MODE ENABLED")
     print("  • Bot only responds in private chats")
     print("  • WAGER SYSTEM COMPLETELY REMOVED")
+    print("  • Python 3.13+ compatible")
     print("✅ Bot is running!")
     
     # Run the bot
     app.run_polling()
+
+if __name__ == '__main__':
+    main()
