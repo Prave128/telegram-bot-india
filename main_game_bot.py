@@ -1,8 +1,10 @@
 import logging
+import asyncio
+import sys
 from typing import Dict, Optional, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
