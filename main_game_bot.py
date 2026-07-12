@@ -4091,7 +4091,7 @@ async def set_commands(app):
 
 # ============ MAIN ============
 
-def main():
+async def main():
     # Initialize enhanced database
     init_db_enhanced()
     
@@ -4104,14 +4104,7 @@ def main():
         http_version="1.1"
     )
     
-    # Fix for Python 3.13+ event loop
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    # Use Application.builder() instead of ApplicationBuilder()
+    # Use Application.builder() with async
     app = Application.builder().token(BOT_TOKEN).request(request).build()
     
     app.post_init = set_commands
@@ -4213,8 +4206,5 @@ def main():
     print("  • Python 3.13+ compatible")
     print("✅ Bot is running!")
     
-    # Run the bot
-    app.run_polling()
-
-if __name__ == '__main__':
-    main()
+    # Run the bot with async
+    await app.run_polling()
