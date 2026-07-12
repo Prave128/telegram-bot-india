@@ -1,6 +1,7 @@
 import os
 import threading
-from flask import Flask, request
+import asyncio
+from flask import Flask
 import main_game_bot
 
 app = Flask(__name__)
@@ -14,12 +15,23 @@ def health():
     return "OK", 200
 
 def run_bot():
-    main_game_bot.main()
+    """Run the bot with proper event loop handling"""
+    try:
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Run the bot
+        main_game_bot.main()
+        
+    except Exception as e:
+        print(f"Bot error: {e}")
+    finally:
+        loop.close()
 
 if __name__ == "__main__":
-    # Run bot in background
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
+    # Run bot in background thread
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
     # Run web server
