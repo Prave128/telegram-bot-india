@@ -15,25 +15,13 @@ def health():
     return "OK", 200
 
 def run_bot():
-    """Run the bot with proper event loop handling"""
-    try:
-        # Create a new event loop for this thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Run the bot
-        main_game_bot.main()
-        
-    except Exception as e:
-        print(f"Bot error: {e}")
-    finally:
-        loop.close()
+    # Fix for Python 3.13 event loop
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    main_game_bot.main()
 
 if __name__ == "__main__":
-    # Run bot in background thread
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
-    # Run web server
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
